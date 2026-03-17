@@ -4,8 +4,12 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.ensemble import GradientBoostingRegressor
 
-st.set_page_config(page_title="Hybrid Movie Ranker", layout="wide")
-st.title("🎬 Production-Grade Two-Stage Recommender")
+# --- UI Setup ---
+st.set_page_config(page_title="Hybrid Recommendation Engine", page_icon="🍿", layout="wide")
+
+# Header Section
+st.title("🍿 Production-Grade Recommendation Engine")
+st.markdown("A two-stage Machine Learning architecture: **Candidate Generation (Item-CF)** $\\rightarrow$ **Ranking (Gradient Boosting)**.")
 
 # --- Load Data ---
 @st.cache_data
@@ -16,7 +20,7 @@ def load_data():
     data = ratings.merge(movies, on="movie_id")
     return movies, ratings, data
 
-with st.spinner("Loading MovieLens Data..."):
+with st.spinner("Initializing Database..."):
     movies, ratings, data = load_data()
 
 # --- Precompute & Train ---
@@ -43,28 +47,63 @@ def prepare_models(_data, _movies):
 
     return popular_movies, item_sim_df, ranker, user_avg, movie_avg, movie_pop
 
-with st.spinner("Compiling Neural Matrices & Training Ranker..."):
+with st.spinner("Training Gradient Boosting Ranker..."):
     popular_movies, item_sim_df, ranker, user_avg, movie_avg, movie_pop = prepare_models(data, movies)
 
-# --- UI & Logic ---
-valid_users = data['user_id'].unique().tolist()
-selected_user = st.sidebar.selectbox("Select User ID:", valid_users[:50])
+# --- Main App Layout ---
+st.markdown("---")
+left_col, right_col = st.columns([1, 2])
 
-if st.button("Generate Recommendations", type="primary"):
-    watched = data[data.user_id == selected_user]["movie_id"].tolist()
-    candidates = set(popular_movies.head(20)["movie_id"].tolist())
+with left_col:
+    st.subheader("👤 User Profile")
+    valid_users = data['user_id'].unique().tolist()
+    selected_user = st.selectbox("Select a User ID to analyze:", valid_users[:50])
     
-    for m in watched[:5]:
-        if m in item_sim_df.index:
-            candidates.update(item_sim_df[m].sort_values(ascending=False).iloc[1:11].index.tolist())
+    # Calculate User Stats
+    user_history = data[data.user_id == selected_user]
+    watched_count = len(user_history)
+    u_avg = user_avg.get(selected_user, 0)
+    
+    # Display Metrics
+    col1, col2 = st.columns(2)
+    col1.metric(label="Movies Watched", value=watched_count)
+    col2.metric(label="Average Rating Given", value=f"{u_avg:.2f} ⭐")
+    
+    st.caption("Recent favorites:")
+    st.dataframe(user_history[['title', 'rating']].sort_values(by='rating', ascending=False).head(3), hide_index=True)
+
+with right_col:
+    st.subheader("🎯 Top 5 Targeted Recommendations")
+    
+    if st.button("Generate Ranked Predictions", type="primary", use_container_width=True):
+        with st.spinner("Running candidate generation and ranking..."):
+            watched = user_history["movie_id"].tolist()
+            candidates = set(popular_movies.head(20)["movie_id"].tolist())
             
-    scored = []
-    for m_id in candidates:
-        if m_id in watched: continue
-        score = ranker.predict([[user_avg.get(selected_user, 3.0), movie_avg.get(m_id, 3.0), movie_pop.get(m_id, 0)]])[0]
-        scored.append((m_id, score))
-        
-    scored = sorted(scored, key=lambda x: x[1], reverse=True)[:5]
-    recs_df = pd.DataFrame(scored, columns=["movie_id", "Predicted Rating"]).merge(movies, on="movie_id")[["title", "genres", "Predicted Rating"]]
-    
-    st.dataframe(recs_df.style.background_gradient(subset=['Predicted Rating'], cmap='Blues'), use_container_width=True)
+            for m in watched[:5]:
+                if m in item_sim_df.index:
+                    candidates.update(item_sim_df[m].sort_values(ascending=False).iloc[1:11].index.tolist())
+                    
+            scored = []
+            for m_id in candidates:
+                if m_id in watched: continue
+                score = ranker.predict([[u_avg, movie_avg.get(m_id, 3.0), movie_pop.get(m_id, 0)]])[0]
+                scored.append((m_id, score))
+                
+            scored = sorted(scored, key=lambda x: x[1], reverse=True)[:5]
+            
+            # Format output table
+            recs_df = pd.DataFrame(scored, columns=["movie_id", "Predicted_Rating"])
+            recs_df = recs_df.merge(movies, on="movie_id")[["title", "genres", "Predicted_Rating"]]
+            recs_df["Predicted_Rating"] = recs_df["Predicted_Rating"].round(2)
+            recs_df.rename(columns={"title": "Movie Title", "genres": "Genre", "Predicted_Rating": "AI Predicted Rating ⭐"}, inplace=True)
+            
+            st.dataframe(recs_df, use_container_width=True, hide_index=True)
+
+# Explainability Section
+with st.expander("🛠️ How does this engine work? (Architecture Breakdown)"):
+    st.write("""
+    1. **Candidate Generation (High Recall):** The system first analyzes the user's historical preferences and utilizes an **Item-to-Item Collaborative Filtering** matrix (measuring Cosine Similarity) to identify ~50 highly relevant candidate movies.
+    2. **Machine Learning Ranking (High Precision):** A **Gradient Boosting Regressor** takes over. It extracts dynamic features (user rating strictness, global movie reception, and total popularity) to predict the exact fractional rating the user will assign to the candidate. 
+    3. **Final Output:** The list is sorted dynamically based on the model's highest confidence predictions.
+    """)
